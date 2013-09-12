@@ -398,7 +398,83 @@ function generate_nyancats(seed, minp, maxp)
 	end
 end
 
+-- fills in water gaps for finite liquids
+function fill_water(minp, maxp)
+	
+	for yy=maxp.y,minp.y,-1 do
+		
+		-- propagate water tiles down
+		for xx=maxp.x,minp.x,-1 do
+		for zz=maxp.z,minp.z,-1 do
+			local pup = {x=xx, y=yy+1, z=zz}
+			local nn = minetest.get_node(pup)
+			local p = {x=xx, y=yy, z=zz}
+			local n = minetest.get_node(p)
+			if nn and n.name == "air" and nn.name == "default:water_source" then 
+				minetest.set_node(p, {name="default:water_source"})
+			end
+		end
+		end
+		
+		-- spread water tiles across +x
+		for xx=minp.x,maxp.x,1 do
+		for zz=minp.z,maxp.z,1 do
+			local pup = {x=xx-1, y=yy, z=zz}
+			local nn = minetest.get_node(pup)
+			local p = {x=xx, y=yy, z=zz}
+			local n = minetest.get_node(p)
+			if nn and n.name == "air" and nn.name == "default:water_source" then 
+				minetest.set_node(p, {name="default:water_source"})
+			end
+		end
+		end
+		-- spread water tiles across -x
+		for xx=maxp.x,minp.x,-1 do
+		for zz=maxp.z,minp.z,-1 do
+			local pup = {x=xx+1, y=yy, z=zz}
+			local nn = minetest.get_node(pup)
+			local p = {x=xx, y=yy, z=zz}
+			local n = minetest.get_node(p)
+			if nn and n.name == "air" and nn.name == "default:water_source" then 
+				minetest.set_node(p, {name="default:water_source"})
+			end
+		end
+		end
+		
+		-- spread water tiles across +z
+		for xx=minp.x,maxp.x,1 do
+		for zz=minp.z,maxp.z,1 do
+			local pup = {x=xx, y=yy, z=zz-1}
+			local nn = minetest.get_node(pup)
+			local p = {x=xx, y=yy, z=zz}
+			local n = minetest.get_node(p)
+			if nn and n.name == "air" and nn.name == "default:water_source" then 
+				minetest.set_node(p, {name="default:water_source"})
+			end
+		end
+		end
+		-- spread water tiles across -z
+		for xx=maxp.x,minp.x,-1 do
+		for zz=maxp.z,minp.z,-1 do
+			local pup = {x=xx, y=yy, z=zz+1}
+			local nn = minetest.get_node(pup)
+			local p = {x=xx, y=yy, z=zz}
+			local n = minetest.get_node(p)
+			if nn and n.name == "air" and nn.name == "default:water_source" then 
+				minetest.set_node(p, {name="default:water_source"})
+			end
+		end
+		end
+		
+		-- go down, next level
+	end
+end
+
+
+
 minetest.register_on_generated(function(minp, maxp, seed)
+	fill_water(minp, maxp)
+
 	if maxp.y >= 2 and minp.y <= 0 then
 		-- Generate papyrus
 		local perlin1 = minetest.get_perlin(354, 3, 0.7, 100)
