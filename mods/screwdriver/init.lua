@@ -1,210 +1,171 @@
+screwdriver = {}
+
+screwdriver.ROTATE_FACE = 1
+screwdriver.ROTATE_AXIS = 2
+screwdriver.disallow = function(pos, node, user, mode, new_param2)
+	return false
+end
+screwdriver.rotate_simple = function(pos, node, user, mode, new_param2)
+	if mode ~= screwdriver.ROTATE_FACE then
+		return false
+	end
+end
+
+-- For attached wallmounted nodes: returns true if rotation is valid
+-- simplified version of minetest:builtin/game/falling.lua#L148.
+local function check_attached_node(pos, rotation)
+	local d = minetest.wallmounted_to_dir(rotation)
+	local p2 = vector.add(pos, d)
+	local n = minetest.get_node(p2).name
+	local def2 = minetest.registered_nodes[n]
+	if def2 and not def2.walkable then
+		return false
+	end
+	return true
+end
+
+screwdriver.rotate = {}
+
+local facedir_tbl = {
+	[screwdriver.ROTATE_FACE] = {
+		[0] = 1, [1] = 2, [2] = 3, [3] = 0,
+		[4] = 5, [5] = 6, [6] = 7, [7] = 4,
+		[8] = 9, [9] = 10, [10] = 11, [11] = 8,
+		[12] = 13, [13] = 14, [14] = 15, [15] = 12,
+		[16] = 17, [17] = 18, [18] = 19, [19] = 16,
+		[20] = 21, [21] = 22, [22] = 23, [23] = 20,
+	},
+	[screwdriver.ROTATE_AXIS] = {
+		[0] = 4, [1] = 4, [2] = 4, [3] = 4,
+		[4] = 8, [5] = 8, [6] = 8, [7] = 8,
+		[8] = 12, [9] = 12, [10] = 12, [11] = 12,
+		[12] = 16, [13] = 16, [14] = 16, [15] = 16,
+		[16] = 20, [17] = 20, [18] = 20, [19] = 20,
+		[20] = 0, [21] = 0, [22] = 0, [23] = 0,
+	},
+}
+
+screwdriver.rotate.facedir = function(pos, node, mode)
+	local rotation = node.param2 % 32 -- get first 5 bits
+	local other = node.param2 - rotation
+	rotation = facedir_tbl[mode][rotation] or 0
+	return rotation + other
+end
+
+screwdriver.rotate.colorfacedir = screwdriver.rotate.facedir
+
+local wallmounted_tbl = {
+	[screwdriver.ROTATE_FACE] = {[2] = 5, [3] = 4, [4] = 2, [5] = 3, [1] = 0, [0] = 1},
+	[screwdriver.ROTATE_AXIS] = {[2] = 5, [3] = 4, [4] = 2, [5] = 1, [1] = 0, [0] = 3}
+}
+
+screwdriver.rotate.wallmounted = function(pos, node, mode)
+	local rotation = node.param2 % 8 -- get first 3 bits
+	local other = node.param2 - rotation
+	rotation = wallmounted_tbl[mode][rotation] or 0
+	if minetest.get_item_group(node.name, "attached_node") ~= 0 then
+		-- find an acceptable orientation
+		for i = 1, 5 do
+			if not check_attached_node(pos, rotation) then
+				rotation = wallmounted_tbl[mode][rotation] or 0
+			else
+				break
+			end
+		end
+	end
+	return rotation + other
+end
+
+screwdriver.rotate.colorwallmounted = screwdriver.rotate.wallmounted
+
+-- Handles rotation
+screwdriver.handler = function(itemstack, user, pointed_thing, mode, uses)
+	if pointed_thing.type ~= "node" then
+		return
+	end
+
+	local pos = pointed_thing.under
+	local player_name = user and user:get_player_name() or ""
+
+	if minetest.is_protected(pos, player_name) then
+		minetest.record_protection_violation(pos, player_name)
+		return
+	end
+
+	local node = minetest.get_node(pos)
+	local ndef = minetest.registered_nodes[node.name]
+	if not ndef then
+		return itemstack
+	end
+	-- can we rotate this paramtype2?
+	local fn = screwdriver.rotate[ndef.paramtype2]
+	if not fn and not ndef.on_rotate then
+		return itemstack
+	end
+
+	local should_rotate = true
+	local new_param2
+	if fn then
+		new_param2 = fn(pos, node, mode)
+	else
+		new_param2 = node.param2
+	end
+
+	-- Node provides a handler, so let the handler decide instead if the node can be rotated
+	if ndef.on_rotate then
+		-- Copy pos and node because callback can modify it
+		local result = ndef.on_rotate(vector.new(pos),
+				{name = node.name, param1 = node.param1, param2 = node.param2},
+				user, mode, new_param2)
+		if result == false then -- Disallow rotation
+			return itemstack
+		elseif result == true then
+			should_rotate = false
+		end
+	elseif ndef.on_rotate == false then
+		return itemstack
+	elseif ndef.can_dig and not ndef.can_dig(pos, user) then
+		return itemstack
+	end
+
+	if should_rotate and new_param2 ~= node.param2 then
+		node.param2 = new_param2
+		minetest.swap_node(pos, node)
+		minetest.check_for_falling(pos)
+	end
+
+	if not (creative and creative.is_enabled_for and
+			creative.is_enabled_for(player_name)) then
+		itemstack:add_wear(65535 / ((uses or 200) - 1))
+	end
+
+	return itemstack
+end
+
+-- Screwdriver
 minetest.register_tool("screwdriver:screwdriver", {
-	description = "Screwdriver",
+	description = "Screwdriver (left-click rotates face, right-click rotates axis)",
 	inventory_image = "screwdriver.png",
 	on_use = function(itemstack, user, pointed_thing)
-	screwdriver_handler(itemstack,user,pointed_thing)
-	return itemstack
+		screwdriver.handler(itemstack, user, pointed_thing, screwdriver.ROTATE_FACE, 200)
+		return itemstack
+	end,
+	on_place = function(itemstack, user, pointed_thing)
+		screwdriver.handler(itemstack, user, pointed_thing, screwdriver.ROTATE_AXIS, 200)
+		return itemstack
 	end,
 })
 
-for i=1,4,1 do
-minetest.register_tool("screwdriver:screwdriver"..i, {
-	description = "Screwdriver in Mode "..i,
-	inventory_image = "screwdriver.png^tool_mode"..i..".png",
-	wield_image = "screwdriver.png",
-	groups = {not_in_creative_inventory=1},
-	on_use = function(itemstack, user, pointed_thing)
-	screwdriver_handler(itemstack,user,pointed_thing)
-	return itemstack
-	end,
-})
-end
-faces_table=
-{
---look dir  +X  +Y  +Z    -Z  -Y  -X
-			2 , 0 , 4 ,    5 , 1 , 3 ,  -- rotate around y+ 0 - 3
-			4 , 0 , 3 ,    2 , 1 , 5 ,
-			3 , 0 , 5 ,    4 , 1 , 2 ,
-			5 , 0 , 2 ,    3 , 1 , 4 ,
-
-			2 , 5 , 0 ,    1 , 4 , 3 ,  -- rotate around z+ 4 - 7
-			4 , 2 , 0 ,    1 , 3 , 5 ,
-			3 , 4 , 0 ,    1 , 5 , 2 ,
-			5 , 3 , 0 ,    1 , 2 , 4 ,
-
-			2 , 4 , 1 ,    0 , 5 , 3 ,  -- rotate around z- 8 - 11
-			4 , 3 , 1 ,    0 , 2 , 5 ,
-			3 , 5 , 1 ,    0 , 4 , 2 ,
-			5 , 2 , 1 ,    0 , 3 , 4 ,
-
-			0 , 3 , 4 ,    5 , 2 , 1 ,  -- rotate around x+ 12 - 15
-			0 , 5 , 3 ,    2 , 4 , 1 ,
-			0 , 2 , 5 ,    4 , 3 , 1 ,
-			0 , 4 , 2 ,    3 , 5 , 1 ,
-
-			1 , 2 , 4 ,    5 , 3 , 0 ,  -- rotate around x- 16 - 19  
-			1 , 4 , 3 ,    2 , 5 , 0 ,  
-			1 , 3 , 5 ,    4 , 2 , 0 ,  
-			1 , 5 , 2 ,    3 , 4 , 0 ,  
-
-			3 , 1 , 4 ,    5 , 0 , 2 ,  -- rotate around y- 20 - 23
-			5 , 1 , 3 ,    2 , 0 , 4 ,  
-			2 , 1 , 5 ,    4 , 0 , 3 ,  
-			4 , 1 , 2 ,    3 , 0 , 5  
-}
-
-function screwdriver_handler (itemstack,user,pointed_thing)
-	local keys=user:get_player_control()
-	local player_name=user:get_player_name()
-	local item=itemstack:to_table()
-	if item["metadata"]=="" or keys["sneak"]==true then return screwdriver_setmode(user,itemstack) end
-	local mode=tonumber((item["metadata"]))
-	if pointed_thing.type~="node" then return end
-	local pos=minetest.get_pointed_thing_position(pointed_thing,above)
-	local node=minetest.get_node(pos)
-	local node_name=node.name
-	if minetest.registered_nodes[node_name].paramtype2 == "facedir" then
-		if minetest.registered_nodes[node_name].drawtype == "nodebox" then
-			if minetest.registered_nodes[node_name].node_box["type"]~="fixed" then return end
-			end
-		if node.param2==nil  then return end
-		-- Get ready to set the param2
-			local n = node.param2
-			local axisdir=math.floor(n/4)
-			local rotation=n-axisdir*4
-			if mode==1 then 
-				rotation=rotation+1
-				if rotation>3 then rotation=0 end
-				n=axisdir*4+rotation
-			end
-
-			if mode==2 then 
-				local ppos=user:getpos()
-				local pvect=user:get_look_dir()
-				local face=get_node_face(pos,ppos,pvect)
-				if face == nil then return end
-				local index=convertFaceToIndex(face)
-				local face1=faces_table[n*6+index+1]
-				local found = 0
-				while found == 0 do
-					n=n+1
-					if n>23 then n=0 end
-					if faces_table[n*6+index+1]==face1 then found=1 end
-				end
-			end
-				
-			if mode==3 then 
-				axisdir=axisdir+1
-				if axisdir>5 then axisdir=0 end
-				n=axisdir*4
-			end
-
-			if mode==4 then 
-				local ppos=user:getpos()
-				local pvect=user:get_look_dir()
-				local face=get_node_face(pos,ppos,pvect)
-				if face == nil then return end
-				if axisdir == face then
-					rotation=rotation+1
-				if rotation>3 then rotation=0 end
-					n=axisdir*4+rotation
-				else
-					n=face*4
-				end
-			end
-			--print (dump(axisdir..", "..rotation))
-			local meta = minetest.get_meta(pos)
-			local meta0 = meta:to_table()
-			node.param2 = n
-			minetest.set_node(pos,node)
-			meta = minetest.get_meta(pos)
-			meta:from_table(meta0)
-			local item=itemstack:to_table()
-			local item_wear=tonumber((item["wear"]))
-			item_wear=item_wear+327 
-			if item_wear>65535 then itemstack:clear() return itemstack end
-			item["wear"]=tostring(item_wear)
-			itemstack:replace(item)
-			return itemstack
-	end
-end
-
-mode_text={
-{"Change rotation, Don't change axisdir."},
-{"Keep choosen face in front then rotate it."},
-{"Change axis dir, Reset rotation."},
-{"Bring top in front then rotate it."},
-}
-
-function screwdriver_setmode(user,itemstack)
-local player_name=user:get_player_name()
-local item=itemstack:to_table()
-local mode
-if item["metadata"]=="" then
-	minetest.chat_send_player(player_name,"Hold shift and use to change screwdriwer modes.")
-	mode=0
-else mode=tonumber((item["metadata"]))
-end
-mode=mode+1
-if mode==5 then mode=1 end
-minetest.chat_send_player(player_name, "Screwdriver mode : "..mode.." - "..mode_text[mode][1] )
-item["name"]="screwdriver:screwdriver"..mode
-item["metadata"]=tostring(mode)
-itemstack:replace(item)
-return itemstack
-end
 
 minetest.register_craft({
-output = "screwdriver:screwdriver",
-recipe = {
-{"default:steel_ingot"},
-{"default:stick"}
-}
+	output = "screwdriver:screwdriver",
+	recipe = {
+		{"default:steel_ingot"},
+		{"group:stick"}
+	}
 })
 
-function get_node_face(pos,ppos,pvect)
-	ppos={x=ppos.x-pos.x,y=ppos.y-pos.y+1.5,z=ppos.z-pos.z}
-	if pvect.x>0 then
-		local t=(-0.5-ppos.x)/pvect.x
-		local y_int=ppos.y+t*pvect.y
-		local z_int=ppos.z+t*pvect.z
-		if y_int>-0.4 and y_int<0.4 and z_int>-0.4 and z_int<0.4 then return 4 end 
-	elseif pvect.x<0 then
-		local t=(0.5-ppos.x)/pvect.x
-		local y_int=ppos.y+t*pvect.y
-		local z_int=ppos.z+t*pvect.z
-		if y_int>-0.4 and y_int<0.4 and z_int>-0.4 and z_int<0.4 then return 3 end 
-	end
-	if pvect.y>0 then
-		local t=(-0.5-ppos.y)/pvect.y
-		local x_int=ppos.x+t*pvect.x
-		local z_int=ppos.z+t*pvect.z
-		if x_int>-0.4 and x_int<0.4 and z_int>-0.4 and z_int<0.4 then return 5 end 
-	elseif pvect.y<0 then
-		local t=(0.5-ppos.y)/pvect.y
-		local x_int=ppos.x+t*pvect.x
-		local z_int=ppos.z+t*pvect.z
-		if x_int>-0.4 and x_int<0.4 and z_int>-0.4 and z_int<0.4 then return 0 end 
-	end
-	if pvect.z>0 then
-		local t=(-0.5-ppos.z)/pvect.z
-		local x_int=ppos.x+t*pvect.x
-		local y_int=ppos.y+t*pvect.y
-		if x_int>-0.4 and x_int<0.4 and y_int>-0.4 and y_int<0.4 then return 2 end 
-	elseif pvect.z<0 then
-		local t=(0.5-ppos.z)/pvect.z
-		local x_int=ppos.x+t*pvect.x
-		local y_int=ppos.y+t*pvect.y
-		if x_int>-0.4 and x_int<0.4 and y_int>-0.4 and y_int<0.4 then return 1 end 
-	end
-end
-
-function convertFaceToIndex (face)
-if face==0 then return 1 end
-if face==1 then return 2 end
-if face==2 then return 3 end
-if face==3 then return 0 end
-if face==4 then return 5 end
-if face==5 then return 4 end
-end
-
+minetest.register_alias("screwdriver:screwdriver1", "screwdriver:screwdriver")
+minetest.register_alias("screwdriver:screwdriver2", "screwdriver:screwdriver")
+minetest.register_alias("screwdriver:screwdriver3", "screwdriver:screwdriver")
+minetest.register_alias("screwdriver:screwdriver4", "screwdriver:screwdriver")
